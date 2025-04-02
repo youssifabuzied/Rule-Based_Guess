@@ -29,6 +29,8 @@ class ConfigType(str, Enum):
     """
     QWEN_X862ARM64 = "launch_spec_qwen"
     BART_RISC2ARM = "launch_spec_bart"
+    QWEN_EULER_ARM2RISC = "launch_spec_qwen_euler_arm2risc"
+    QWEN_EULER_RISC2ARM = "launch_spec_qwen_euler_risc2arm"
 
     def get_path(self) -> Path:
         """Get full path to the YAML configuration file.
@@ -64,10 +66,10 @@ class Guess:
         model_name = self.config.model_name.lower()
         if "qwen" in model_name:
             print(f"Loading Qwen model: {self.config.model_name}")
-            self.model: Model = QwenModel(model_name=self.config.model_name)
+            self.model: Model = QwenModel(model_name=self.config.model_name, device="cpu")
         elif "bart" in model_name:
             print(f"Loading BART model: {self.config.model_name}")
-            self.model: Model = BartLargeModel(model_name=self.config.model_name)
+            self.model: Model = BartLargeModel(model_name=self.config.model_name, device="mps")
         else:
             raise ValueError(f"Unknown model type in {self.config.model_name}")
 
@@ -92,115 +94,111 @@ class Guess:
             batch_size=self.config.inference_params.get("batch_size", 32),
             evaluation_metrics=["compilation"]
         )
-        dataset = Dataset.from_config(dataset_config)
-        dataset._instances = dataset.load_data()
+        self.dataset = Dataset.from_config(dataset_config)
 
         # Configure data loader with chunking for encoder-decoder models
         self.data_loader = DataLoader.from_dataset(
-            dataset=dataset,
+            dataset=self.dataset,
             batch_size=dataset_config.batch_size,
             enable_chunking=self.is_enc_dec  # Enable chunking for enc-dec models
         )
         print(f"Number of instances: {len(self.data_loader.dataset._instances)}")
 
-    def guess(self, datapoint: Dict) -> Dict:
-        """Generate translation candidates for a datapoint.
-        
-        Args:
-            datapoint: Dictionary containing source code and metadata including:
-                - source: Source file name
-                - c: Optional C source code
-                - {source_lang}_fns: Functions to translate
-                - {source_lang}_cloze: Optional cloze task content
+    def guess(self) -> Dict[str, Dict]:
+        """Generate translation candidates for all datapoints using batch processing.
         
         Returns:
-            Dictionary containing translation predictions and metadata, or empty dict
-            if predictions already exist
+            Dictionary mapping source files to their prediction results
         """
-        # Check if predictions already exist
-        progname = datapoint["source"].split(".c")[0]
-        pred_file = self.predictions_folder / f"guess_{progname}.json"
-        if pred_file.exists():
-            return {}
+        all_predictions = {}
 
-        # Initialize prediction structure
-        prediction_result = {
-            "source_file": datapoint["source"],
-            "c_code": datapoint.get("c", ""),
-            f"src_{self.config.source_lang}": {
-                "functions": {},
-                "cloze": datapoint.get(f"{self.config.source_lang}_cloze", "")
-            },
-            f"tgt_{self.config.target_lang}": {
-                "functions": {},
-                "cloze_candidates": []
-            }
-        }
-        print(f"Processing {datapoint['source']}...")
-        with torch.no_grad():
-            # Process each function in the source code
-            for fn_name, src_chunk in datapoint[f"{self.config.source_lang}_fns"].items():
-                # Generate translation candidates
-                print(f"  Translating {fn_name}...")
-                prompt = self.model.prepare_prompt(
-                    src_chunk,
-                    self.config.source_lang,
-                    self.config.target_lang
-                )
-                print(f"    Prompt: {prompt}")
-                batch = self.model.tokenize(prompt)
-                result = self.model.infer(batch, config=self.inference_cfg)
-                print(f"    Result: {result}")
-                # Process and score candidates
-                candidates = [
-                    {
-                        "tokens": seq.tolist(),
-                        "decoded": self.model.decode(seq),
-                        "score": score.item()
+        # Process all batches
+        for batch in self.data_loader.iter_batches():
+            for datapoint in batch:
+                # Skip if predictions already exist
+                progname = datapoint.instance_id
+                pred_file = self.predictions_folder / f"guess_{progname}.json"
+                target_file = self.predictions_folder / f"guess_{progname}_{self.config.target_lang}.s"
+
+                if pred_file.exists():
+                    continue
+
+                # Initialize prediction structure
+                prediction_result = {
+                    "source_file": datapoint.source,
+                    "c_code": "",  # No C code in assembly dataset
+                    f"src_{self.config.source_lang}": {
+                        "functions": {},
+                        "cloze": ""  # No cloze predictions for assembly
+                    },
+                    f"tgt_{self.config.target_lang}": {
+                        "functions": {},
+                        "cloze_candidates": []
                     }
-                    for seq, score in zip(result.tokens, result.scores)
-                ]
-
-                # Store sorted candidates
-                prediction_result[f"tgt_{self.config.target_lang}"]["functions"][fn_name] = {
-                    "candidates": sorted(candidates, key=lambda x: x["score"], reverse=True)
                 }
+                print(f"Processing {datapoint.source}...")
 
-                # Clean up GPU memory
-                gc.collect()
-                torch.cuda.empty_cache()
-
-            # Handle cloze-style translation if present
-            if f"{self.config.source_lang}_cloze" in datapoint:
-                cloze_src = datapoint[f"{self.config.source_lang}_cloze"]
-                prompt = self.model.prepare_prompt(
-                    cloze_src,
-                    self.config.source_lang,
-                    self.config.target_lang
-                )
-                print(f"    Prompt: {prompt}")
-                batch = self.model.tokenize(prompt)
-                result = self.model.infer(batch, config=self.inference_cfg)
-
-                # Process cloze candidates
-                cloze_candidates = [
-                    {
-                        "tokens": seq.tolist(),
-                        "decoded": self.model.decode(seq),
-                        "score": score.item()
-                    }
-                    for seq, score in zip(result.tokens, result.scores)
+                # For assembly code, we treat the entire source as one function
+                function_prompts = [
+                    ("main", self.model.prepare_prompt(
+                        datapoint.source,
+                        self.config.source_lang,
+                        self.config.target_lang
+                    ))
                 ]
 
-                # Store sorted cloze candidates
-                prediction_result[f"tgt_{self.config.target_lang}"]["cloze_candidates"] = sorted(
-                    cloze_candidates, key=lambda x: x["score"], reverse=True
-                )
+                # Process prompts in batches
+                with torch.no_grad():
+                    for batch_start in range(0, len(function_prompts), self.data_loader.batch_size):
+                        batch_prompts = function_prompts[batch_start:batch_start + self.data_loader.batch_size]
+                        batch_names, prompts = zip(*batch_prompts)
+                        
+                        # Tokenize and run inference on batch
+                        print(f"  Processing batch of {len(prompts)} prompts...")
+                        print(prompts)
+                        batch = self.model.tokenize(list(prompts))
+                        print(f"  Tokenized batch")
+                        result = self.model.infer(batch, config=self.inference_cfg)
+                        print(f"  Inferred batch")
 
-        # Save predictions to file
-        with open(pred_file, "w") as f:
-            json.dump(prediction_result, f, indent=4)
+                        # Process results for each item in batch
+                        for idx, (name, tokens, scores) in enumerate(zip(batch_names, result.tokens, result.scores)):
+                            candidates = [
+                                {
+                                    "tokens": seq.tolist(),
+                                    "decoded": self.model.decode(seq),
+                                    "score": score.item()
+                                }
+                                for seq, score in zip(tokens, scores)
+                            ]
 
-        return prediction_result
 
+                            if name == "__cloze__":
+                                prediction_result[f"tgt_{self.config.target_lang}"]["cloze_candidates"] = candidates
+                            else:
+                                prediction_result[f"tgt_{self.config.target_lang}"]["functions"][name] = {
+                                    "candidates": candidates,
+                                    f"{self.config.target_lang}_tokens": "".join([ c["decoded"] for c in candidates ]).strip("```armasm\n").strip("```"),
+                                }
+                            print(f"    Processed {name} with {len(candidates)} candidates")
 
+                        # Clean up GPU memory after each batch
+                        gc.collect()
+                        torch.cuda.empty_cache()
+
+                # Create directory structure and save predictions to file
+                pred_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(pred_file, "w") as f:
+                    json.dump(prediction_result, f, indent=2)
+                with open(target_file, "w") as f:
+                    f.write(
+                        prediction_result[f"tgt_{self.config.target_lang}"]["functions"]["main"][f"{self.config.target_lang}_tokens"]
+                    )
+
+                # Store in all_predictions
+                all_predictions[datapoint.instance_id] = prediction_result
+
+        return all_predictions
+
+    def evaluate(self, predictions: Dict[str, Dict]) -> Dict[str, float]:
+        return self.dataset.evaluate(predictions)

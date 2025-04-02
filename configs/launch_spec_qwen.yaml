@@ -5,10 +5,10 @@ run:
   
 # Model Configuration
 model:
-  name: "ahmedheakl/qwen2.5_1.5b_1M_stack_16kcw_2ep"
+  name: "ahmedheakl/qwen2.5_1.5b_500k_16kcw_2ep_armv8"
   is_enc_dec: false
   checkpoint: "..." 
-  max_length: 1024
+  max_length: 1000
 
 # Inference Configuration
 inference:

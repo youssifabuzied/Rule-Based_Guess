@@ -29,7 +29,7 @@ class BartLargeModel(Model):
             device: Device to place model on (cuda/cpu)
         """
         self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to(device)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained("facebook/bart-large")
         tokenizer.padding_side = "right"
         tokenizer.pad_token = tokenizer.eos_token
         super().__init__(tokenizer, device=device)

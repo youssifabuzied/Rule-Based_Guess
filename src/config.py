@@ -31,7 +31,7 @@ class Config:
         else:
             timestamp = self._config["run"]["timestamp"]
 
-        model_name = self._config.get("model", {}).get("name", "unknown_model")
+        model_name = self._config.get("model", {}).get("name", "unknown_model").split("/")[-1]
         artifacts_base = self._config["run"].get("save_artifacts_path", "artifacts/")
         save_path = Path(artifacts_base) / model_name / timestamp
         save_path.mkdir(parents=True, exist_ok=True)

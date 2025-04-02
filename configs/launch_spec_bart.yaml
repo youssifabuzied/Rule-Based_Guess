@@ -20,13 +20,13 @@ inference:
 
 # Language Configuration
 language:
-  source_lang: "RISC5"
-  target_lang: "ARM64"
+  source_lang: "x86"
+  target_lang: "arm64"
   viceversa: false
 
 # Data Configuration
 dataset:
-  name: "human-eval"
+  name: "unix_commands"
   gcc_args: "..."
   additional_notes: "..."
 

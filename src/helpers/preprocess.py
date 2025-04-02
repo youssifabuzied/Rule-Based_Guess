@@ -17,12 +17,10 @@ class AssemblyPreprocessor:
     This class provides utilities for cleaning assembly code by removing
     comments and empty lines.
     
-    Args:
-        log_file: Optional path to log file
+    Attributes:
         min_func_lines: Minimum lines for a valid function
         max_func_lines: Maximum lines for a valid function
     """
-    log_file: str | None = None
     min_func_lines: int = 3
     max_func_lines: int = 500
     def clean_file(self, file_path: Path) -> str:
@@ -91,3 +89,61 @@ class AssemblyPreprocessor:
         """
         # Remove everything after comment characters
         return re.sub(r'[#;].*$', '', line)
+
+    def preprocess_file(self, file_path: Path) -> List[dict]:
+        """Preprocess an assembly file and extract functions.
+        
+        Args:
+            file_path: Path to assembly file
+            
+        Returns:
+            List of dictionaries containing function info:
+            - name: Function name
+            - code: Cleaned function code
+            - start_line: Starting line number
+            - end_line: Ending line number
+        """
+        # Clean the file first
+        cleaned_code = self.clean_file(file_path)
+        
+        # Split into lines
+        lines = cleaned_code.split('\n')
+        
+        functions = []
+        current_func = []
+        current_name = None
+        start_line = None
+        
+        for i, line in enumerate(lines):
+            # Look for function labels (ending with :)
+            if line.strip().endswith(':') and not current_func:
+                current_name = line.strip()[:-1].strip()
+                start_line = i
+                current_func = [line]
+            elif current_func:
+                current_func.append(line)
+                
+                # End of function detection
+                if line.strip() in ['ret', 'retq', 'b lr', 'ret lr']:
+                    # Check function size constraints
+                    if self.min_func_lines <= len(current_func) <= self.max_func_lines:
+                        functions.append({
+                            'name': current_name,
+                            'code': '\n'.join(current_func),
+                            'start_line': start_line,
+                            'end_line': i
+                        })
+                    current_func = []
+                    current_name = None
+                    start_line = None
+        
+        # Handle last function if it exists
+        if current_func and self.min_func_lines <= len(current_func) <= self.max_func_lines:
+            functions.append({
+                'name': current_name,
+                'code': '\n'.join(current_func),
+                'start_line': start_line,
+                'end_line': len(lines) - 1
+            })
+        
+        return functions

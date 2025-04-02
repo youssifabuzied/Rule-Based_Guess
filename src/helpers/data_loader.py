@@ -10,6 +10,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import List, Iterator, Optional
 import logging
+import tempfile
 
 from .dataset import Dataset, DatasetInstance
 from src.helpers.preprocess import AssemblyPreprocessor
@@ -26,7 +27,6 @@ class DataLoader:
     Attributes:
         dataset: Dataset instance for data loading and evaluation
         batch_size: Number of samples per batch
-        log_file: Optional path to log file
         min_func_lines: Minimum lines for a valid function
         max_func_lines: Maximum lines for a valid function
         enable_chunking: Whether to split large functions into chunks
@@ -35,7 +35,6 @@ class DataLoader:
     """
     dataset: Dataset
     batch_size: Optional[int] = None
-    log_file: Optional[str] = None
     min_func_lines: int = 3
     max_func_lines: int = 500
     enable_chunking: bool = False
@@ -75,7 +74,6 @@ class DataLoader:
         """Initialize logger and preprocessor after dataclass initialization."""
         self._logger = logging.getLogger(__name__)
         self._preprocessor = AssemblyPreprocessor(
-            log_file=self.log_file,
             min_func_lines=self.min_func_lines,
             max_func_lines=self.max_func_lines
         )
@@ -113,8 +111,13 @@ class DataLoader:
         processed = []
 
         for inst in instances:
-            src_path = Path(f"/tmp/{inst.instance_id}_src.s")
-            tgt_path = Path(f"/tmp/{inst.instance_id}_tgt.s")
+            print(inst.instance_id)
+            # Create unique paths for source and target files
+            safe_id = inst.instance_id.replace('/', '_')
+            tmp_dir = Path(tempfile.gettempdir()) / "UnixCommands" / safe_id
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            src_path = tmp_dir / f"{safe_id}_src.s"
+            tgt_path = tmp_dir / f"{safe_id}_tgt.s"
 
             try:
                 # Write assembly to temp files

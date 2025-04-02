@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import subprocess
 from typing import Dict, List, Union
 
 from src.helpers.dataset import Dataset, DatasetInstance, AssemblyLanguage, DatasetConfig
@@ -129,9 +130,10 @@ class UnixCommandDataset(Dataset):
             
         print(f"Created {len(instances)} instances")
         self.logger.info(f"Loaded {len(instances)} instances")
+        self._instances = instances
         return instances
     
-    def evaluate(self, predictions: List[List[str]]) -> Dict[str, Union[float, Dict[str, str]]]:
+    def evaluate(self, predictions: Dict[str, Dict]) -> Dict[str, Union[float, Dict[str, str]]]:
         """Evaluate transpilation quality by checking if assembly code can be compiled.
         
         Returns:
@@ -143,25 +145,23 @@ class UnixCommandDataset(Dataset):
         metrics = {}
         errors = {}
         per_command_results = {}
-        
-        # Flatten predictions
-        flat_preds = [p for batch in predictions for p in batch]
-        
-        # Overall metrics
-        total = len(flat_preds)
+
+        total = len(predictions)
+
         compile_success = 0
-        
-        for pred, inst in zip(flat_preds, self._instances):
-            command = inst.metadata['source_file'].replace('.s', '')
+
+        for instance_id, pred in predictions.items():
+            instance = [i for i in self._instances if i.instance_id == instance_id][0]
+            instance_id = instance.instance_id.split('/')[-1]
             
             # Create temporary directory for compilation
-            temp_dir = Path(f"/tmp/asm_eval_{command}")
+            temp_dir = Path(f"/tmp/UnixCommands")
             temp_dir.mkdir(parents=True, exist_ok=True)
             
             try:
                 # Write prediction to assembly file
-                asm_file = temp_dir / f"{command}.s"
-                asm_file.write_text(pred)
+                asm_file = temp_dir / f"{instance_id}.s"
+                asm_file.write_text(pred[f"tgt_{self.target_arch}"]["functions"]["main"][f"{self.target_arch}_tokens"])
                 
                 # Try to compile the assembly
                 if self.target_arch == 'arm64':
@@ -182,19 +182,21 @@ class UnixCommandDataset(Dataset):
                     text=True,
                     cwd=temp_dir
                 )
+
+                print(result)
                 
                 if result.returncode == 0:
                     compile_success += 1
-                    per_command_results[command] = "success"
+                    per_command_results[instance_id] = "success"
                 else:
-                    per_command_results[command] = "failed"
-                    errors[command] = result.stderr
+                    per_command_results[instance_id] = "failed"
+                    errors[instance_id] = result.stderr
                 
             except Exception as e:
                 import traceback
-                per_command_results[command] = "error"
-                errors[command] = traceback.format_exc()
-                self.logger.error(f"Error compiling {command}: {e}")
+                per_command_results[instance_id] = "error"
+                errors[instance_id] = traceback.format_exc()
+                self.logger.error(f"Error compiling {instance_id}: {e}")
                 
             finally:
                 # Cleanup
