@@ -1,26 +1,25 @@
 run:
   name: "bartlarge_risctoarm_cloze2048_run_on_humaneval_RISC5_to_ARM64"
-  timestamp: null 
+  timestamp: null
   save_artifacts_path: "artifacts/"
-  
+
 # Model Configuration
 model:
   name: "celinelee/bartlarge_risctoarm_cloze2048"
   is_enc_dec: true
-  checkpoint: "..." 
+  checkpoint: "..."
   max_length: 2048
 
 # Inference Configuration
 inference:
-  beam_size: 5
+  beam_size: 1
   temperature: 0.7
-  k: 20
-  num_guesses: 50
+  num_guesses: 1
   lambda_val: 0.95
 
 # Language Configuration
 language:
-  source_lang: "x86"
+  source_lang: "riscv"
   target_lang: "arm64"
   viceversa: false
 
@@ -29,14 +28,6 @@ dataset:
   name: "unix_commands"
   gcc_args: "..."
   additional_notes: "..."
-
-# Feature Flags
-features:
-  guess: false
-  sketch: false
-  few_shot: false
-  verbose: false
-  log_attention_maps: true
 
 # Sketch Configuration
 sketch:

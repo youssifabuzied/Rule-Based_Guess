@@ -1,16 +1,18 @@
 """Implementation of BART-based sequence-to-sequence model for assembly transpilation."""
 
+import gc
 from typing import Dict, List, Optional, Union
 
 import torch
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, AutoConfig
 
-from src.helpers.model import Model, InferenceConfig, InferenceResult
+from src.helpers.dataset import DatasetInstance
+from src.helpers.model import Model, InferenceConfig, PredictionResult
 
 
 class BartLargeModel(Model):
     """Implementation of BART-based transpiler model.
-    
+
     This class implements the Model interface using the BART architecture,
     which is well-suited for sequence-to-sequence tasks like assembly
     code translation. BART uses a bidirectional encoder and autoregressive
@@ -23,15 +25,36 @@ class BartLargeModel(Model):
         device: Optional[str] = "cuda" if torch.cuda.is_available() else "cpu"
     ):
         """Initialize BART model and tokenizer.
-        
+
         Args:
             model_name: Hugging Face model ID or local checkpoint path
             device: Device to place model on (cuda/cpu)
         """
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to(device)
         tokenizer = AutoTokenizer.from_pretrained("facebook/bart-large")
-        tokenizer.padding_side = "right"
-        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.model_max_length = 2048
+
+        config = AutoConfig.from_pretrained("facebook/bart-large")
+        config.vocab_size = len(tokenizer)
+        config.max_position_embeddings = 2048
+
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(
+            model_name,
+            from_tf=False,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+            config=config
+        ).to(device)
+
+        embedding_size = self.model.get_input_embeddings().weight.shape[0]
+        if len(tokenizer) > embedding_size:
+            self.model.resize_token_embeddings(len(tokenizer))
+
+        if self.model.config.decoder_start_token_id is None:
+            print(
+                f"config.decoder_start_token_id is set to None, so auto setting to to BOS"
+            )
+            self.model.config.decoder_start_token_id = tokenizer.bos_token_id
+
         super().__init__(tokenizer, device=device)
         self.model.eval()
 
@@ -42,59 +65,52 @@ class BartLargeModel(Model):
         target_lang: str
     ) -> str:
         """Prepare text prompt for BART model.
-        
+
         Unlike chat-based models, BART uses a simple cloze-style input format.
-        
+
         Args:
             source_code: Source assembly code
             source_lang: Source assembly language
             target_lang: Target assembly language
-            
+
         Returns:
             Formatted prompt string
         """
-        return f"Translate from {source_lang} to {target_lang}:\n{source_code.strip()}"
+        return source_code
 
     def tokenize(
         self,
         text: Union[str, List[str]],
-        **kwargs
     ) -> Dict[str, torch.Tensor]:
         """Tokenize input text and move tensors to device.
-        
+
         Args:
             text: Input text or list of texts to tokenize
-            **kwargs: Additional tokenizer arguments
-            
+
         Returns:
             Dict containing tokenized tensors on target device
         """
         return self.tokenizer(
             text,
             return_tensors="pt",
-            padding=True,
-            truncation=True,
-            **kwargs
         ).to(self.device)
 
     def decode(
         self,
         token_ids: torch.Tensor,
-        **kwargs
     ) -> Union[str, List[str]]:
         """Decode token IDs back to text.
-        
+
         Args:
             token_ids: Tensor of token IDs to decode
             **kwargs: Additional decoding arguments
-            
+
         Returns:
             Single string if batch size is 1, otherwise list of strings
         """
         decoded = self.tokenizer.batch_decode(
             token_ids,
             skip_special_tokens=True,
-            **kwargs
         )
         if token_ids.shape[0] == 1:
             return decoded[0]
@@ -104,15 +120,14 @@ class BartLargeModel(Model):
         self,
         input_tokens: Dict[str, torch.Tensor],
         config: Optional[InferenceConfig] = None,
-        **kwargs
-    ) -> InferenceResult:
+    ):
         """Perform inference using BART seq2seq model.
-        
+
         Args:
             input_tokens: Dict containing input_ids and attention_mask
             config: Optional inference configuration
             **kwargs: Additional generation arguments
-            
+
         Returns:
             InferenceResult containing generated tokens and metadata
         """
@@ -120,39 +135,125 @@ class BartLargeModel(Model):
             config = InferenceConfig()
 
         outputs = self.model.generate(
-            input_ids=input_tokens["input_ids"],
-            attention_mask=input_tokens.get("attention_mask"),
+            **input_tokens,
             max_new_tokens=config.max_length,
             temperature=config.temperature,
             num_return_sequences=config.num_return_sequences,
             num_beams=config.beam_size,
             do_sample=(config.temperature > 0),
-            output_attentions=False,  # В generate attention не возвращается, только при forward
-            **kwargs
+            output_attentions=True,
+            return_dict_in_generate=True,
+            output_scores=True,
+            no_repeat_ngram_size=0,
         )
+        alignments = self.get_alignments(outputs)
 
-        # Attention карты можно получить только при forward, если это понадобится — можно отдельно добавить метод.
-        dummy_attention = {}
+        return (input_tokens.input_ids, outputs.sequences, alignments)
 
-        # Счётчик оценок отсутствует, можно заполнить нулями
-        dummy_scores = torch.zeros(outputs.shape[0], device=self.device)
+    def extract(self, program):
+        sections = {}
+        cloze = ""
+        in_chunk = False
+        for l in [l+"\n" for l in program.split("\n")]:
+            l2 = l.strip()
+            # if it's a .LC# line or a global function name label line
+            # if l2 and l2[0] not in {'.', '_'} and '.' not in l2 and l2[-1] == ":":
+            if l2 and l2[0] not in {'.'} and '.' not in l2 and l2[-1] == ":":
+                in_chunk = True
+                section = l2[:-1]
+                cloze += f"{{{section}}}"
+                sections[section] = ""
+            if in_chunk:
+                sections[section] += l
+                if l2.strip() in {".cfi_endproc", "jr	ra"}:
+                    in_chunk = False
+            else:
+                cloze += l
+        return sections, cloze
 
-        return InferenceResult(
-            tokens=outputs,
-            scores=dummy_scores,
-            attention=dummy_attention
-        )
+    def get_alignments(self, pred_outputs, top_k=10):
+        attentions = [
+            xattn[-1].mean(dim=1)[:, 0]  # (output_len, input_len)
+            for xattn in pred_outputs.cross_attentions
+        ]
 
-    def generate_from_text(
+        out_seq_len = pred_outputs.sequences.shape[-1]
+        aligned_tokens = []
+
+        for out_idx in range(out_seq_len):
+            if out_idx >= len(attentions):
+                break
+
+            # Get attention weights for this output token
+            alignment = attentions[out_idx][0]  # (input_len,)
+
+            # Get top-k input indices by attention
+            top_indices = alignment.topk(top_k).indices.tolist()
+
+            aligned_tokens.append(top_indices)
+
+        return aligned_tokens
+
+    def predict(
         self,
-        source_code: str,
-        source_lang: str,
-        target_lang: str,
-        config: Optional[InferenceConfig] = None
-    ) -> str:
-        """High-level API call: takes text, runs inference, returns text."""
-        prompt = self.prepare_prompt(source_code, source_lang, target_lang)
-        tokens = self.tokenize(prompt)
-        result = self.infer(tokens, config=config)
-        decoded_str = self.decode(result.tokens)
-        return decoded_str.strip()
+        instance: DatasetInstance,
+        config: Optional[InferenceConfig] = None,
+    ) -> PredictionResult:
+        sections, cloze = self.extract(instance.source)
+        sections_pred = {}
+
+        self.model.eval()
+
+        with torch.no_grad():
+            for section_name, section_code in sections.items():
+                tokenized_input = self.tokenize(section_code)
+
+                sections_pred[section_name] = self.infer(
+                    tokenized_input, config
+                )
+                gc.collect()
+
+        tokenized_cloze = self.tokenize(cloze)
+        cloze_pred = self.infer(tokenized_cloze, config)
+
+        source_offset = 0
+
+        source_tokens = torch.as_tensor(
+            [[]], dtype=torch.int64
+        ).to(self.device)
+        pred_tokens = torch.as_tensor(
+            [[]], dtype=torch.int64
+        ).to(self.device)
+        merged_alignments = []
+
+        def merge_sections(section):
+            nonlocal source_tokens, pred_tokens, source_offset, merged_alignments
+
+            (source_ids, pred_ids, alignments) = section
+
+            source_tokens = torch.cat((source_tokens, source_ids), dim=1)
+            pred_tokens = torch.cat((pred_tokens, pred_ids), dim=1)
+
+            merged_alignments.extend(
+                [
+                    [src_idx + source_offset for src_idx in src_idxes]
+                    for src_idxes in alignments
+                ]
+            )
+
+            source_offset += len(source_ids[0])
+
+            while len(merged_alignments) < len(pred_tokens[0]):
+                merged_alignments.append([])
+
+        for section_name, section in sections_pred.items():
+            merge_sections(section)
+
+        merge_sections(cloze_pred)
+
+        return PredictionResult(
+            instance_id=instance.instance_id,
+            source=source_tokens,
+            pred=pred_tokens,
+            alignments=merged_alignments
+        )

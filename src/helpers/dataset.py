@@ -14,7 +14,7 @@ class AssemblyLanguage(Enum):
     X86 = 'x86'
     ARM64 = 'arm64'
     MIPS = 'mips'
-    
+
     @classmethod
     def from_str(cls, name: str) -> 'AssemblyLanguage':
         """Create AssemblyLanguage from string name."""
@@ -29,7 +29,7 @@ class AssemblyLanguage(Enum):
 @dataclass
 class DatasetConfig:
     """Configuration for dataset initialization.
-    
+
     Attributes:
         source_lang: Source assembly language
         target_lang: Target assembly language
@@ -43,7 +43,7 @@ class DatasetConfig:
     batch_size: int = 32
     evaluation_metrics: List[str] = None
     metadata: Optional[Dict[str, Any]] = None
-    
+
     @classmethod
     def from_file(cls, config_path: str) -> 'DatasetConfig':
         """Load configuration from JSON file."""
@@ -55,7 +55,7 @@ class DatasetConfig:
 @dataclass
 class DatasetInstance:
     """Represents a single assembly code transpilation instance.
-    
+
     Attributes:
         instance_id: Unique identifier for this instance
         source_lang: Source assembly language
@@ -74,10 +74,10 @@ class DatasetInstance:
 
 class Dataset(ABC):
     """Abstract base class for assembly code datasets.
-    
+
     This class defines the interface for loading and evaluating assembly code data
     for transpilation between different architectures.
-    
+
     Attributes:
         config: Dataset configuration
         source_lang: Source assembly language
@@ -86,10 +86,10 @@ class Dataset(ABC):
     """
     # Registry of dataset implementations
     _registry: ClassVar[Dict[str, type]] = {}
-    
+
     def __init__(self, config: DatasetConfig):
         """Initialize dataset.
-        
+
         Args:
             config: Dataset configuration
         """
@@ -98,7 +98,7 @@ class Dataset(ABC):
         self.target_lang = AssemblyLanguage.from_str(config.target_lang)
         self.logger = logging.getLogger(__name__)
         self._instances: List[DatasetInstance] = []
-    
+
     @classmethod
     def register(cls, name: str):
         """Register a dataset implementation."""
@@ -106,14 +106,14 @@ class Dataset(ABC):
             cls._registry[name] = subclass
             return subclass
         return decorator
-    
+
     @classmethod
     def from_config(cls, config: Union[str, Dict[str, Any], DatasetConfig]) -> 'Dataset':
         """Create a dataset instance from configuration.
-        
+
         Args:
             config: Either a path to config file, a config dict, or DatasetConfig instance
-            
+
         Returns:
             Initialized dataset instance
         """
@@ -121,39 +121,37 @@ class Dataset(ABC):
             config = DatasetConfig.from_file(config)
         elif isinstance(config, dict):
             config = DatasetConfig(**config)
-        
+
         if config.dataset_name not in cls._registry:
             raise ValueError(
                 f"Unknown dataset type: {config.dataset_name}. "
                 f"Registered types: {list(cls._registry.keys())}")
-        
+
         return cls._registry[config.dataset_name](config)
-    
+
     @abstractmethod
     def load_data(self) -> List[DatasetInstance]:
         """Load and preprocess assembly code data.
-        
+
         Returns:
             List of DatasetInstance objects containing source and target code
         """
         pass
-    
+
     @abstractmethod
     def evaluate(self, predictions: List[List[str]]) -> Dict[str, float]:
         """Evaluate the quality of transpiled assembly code.
-        
+
         This method computes metrics specified in the configuration to assess
         transpilation quality. Default metrics include:
         1. Instruction accuracy
         2. Function structure similarity
         3. Register usage accuracy
-        
+
         Args:
             predictions: List of batches of predicted assembly code strings
-            
+
         Returns:
             Dictionary of metric names to values
         """
         pass
-
-        

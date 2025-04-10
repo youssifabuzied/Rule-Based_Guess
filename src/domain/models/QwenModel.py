@@ -12,7 +12,7 @@ from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.models import deberta
 
-from src.helpers.model import Model, InferenceConfig, InferenceResult
+from src.helpers.model import Model, InferenceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +178,7 @@ class QwenModel(Model):
         input_tokens: Dict[str, torch.Tensor],
         config: Optional[InferenceConfig] = None,
         **kwargs
-    ) -> InferenceResult:
+    ):
         """Perform inference on prepared input tokens.
 
         Args:
@@ -220,47 +220,3 @@ class QwenModel(Model):
 
         logger.info(f"Generated {generated_ids.shape[1]} new tokens")
         return result
-
-    @measure_time("Complete generation pipeline")
-    def generate_from_text(
-        self,
-        source_code: str,
-        source_lang: str,
-        target_lang: str,
-        config: Optional[InferenceConfig] = None
-    ) -> str:
-        """High-level interface for text-to-text generation.
-
-        Args:
-            source_code: Source assembly code as text
-            source_lang: Source assembly language name
-            target_lang: Target assembly language name
-            config: Optional inference configuration
-
-        Returns:
-            Generated target assembly code as string
-        """
-        logger.info(f"Starting {source_lang} -> {target_lang} code generation")
-
-        with tqdm(total=4, desc="Generation Pipeline") as pbar:
-            # Step 1: Prepare prompt
-            prompt = self.prepare_prompt(source_code, source_lang, target_lang)
-            pbar.update(1)
-
-            # Step 2: Tokenize
-            tokens = self.tokenize(prompt)
-            pbar.update(1)
-
-            # Step 3: Generate
-            result = self.infer(tokens, config=config)
-            pbar.update(1)
-
-            # Step 4: Decode and clean
-            decoded_str = self.decode(result.tokens)
-            cleaned = decoded_str.split(
-                f"```{target_lang.lower()}asm\n")[-1].split("```")[0].strip()
-            pbar.update(1)
-
-        logger.info(
-            f"Generation completed. Output length: {len(cleaned)} characters")
-        return cleaned
