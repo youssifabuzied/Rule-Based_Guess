@@ -1,8 +1,20 @@
-from typing import List
+from dataclasses import dataclass
+
+from z3 import is_eq
+from src.sketch.pure_blocks import is_pure_line, PureInstructionBlock
+from src.sketch.compare_helpers import compare_line_instructions
+from typing import List, Tuple, Dict
 from src.config import Config
 from src.helpers.model import Model, PredictionResult
-from src.sketch.compare_helpers import compare_line_instructions
-from src.sketch.pure_blocks import is_pure_line, PureInstructionBlock
+from src.sketch.uni_parser import parse_assembly
+from src.sketch.z3_helpers import blocks_equivalent_z3, extract_block_info, is_valid_block_pair
+
+
+@dataclass
+class SketchResult:
+    invalid_blocks: List[PureInstructionBlock]
+    non_equivalent_blocks: List[PureInstructionBlock]
+    total_blocks: List[PureInstructionBlock]
 
 
 class Sketch:
@@ -188,8 +200,72 @@ class Sketch:
 
         return blocks
 
-    def sketch(self, predictions: List[PredictionResult]):
-        pass
+    def sketch(self, predictions: Dict[str, PredictionResult]) -> List[Tuple[PredictionResult, SketchResult]]:
+        sketch_results = []
+        for instance_id, pred in predictions.items():
+            sketch_results.append((pred, self._sketch_single(pred)))
 
-    def _sketch_single(self, prediction: PredictionResult):
-        pass
+        return sketch_results
+
+    def _sketch_single(self, prediction: PredictionResult) -> SketchResult:
+        line_mappings = self.map_predicted_lines_to_source_lines(
+            prediction.source,
+            prediction.pred,
+            prediction.alignments
+        )
+
+        blocks = self.extract_pure_instruction_blocks(
+            prediction.source, prediction.pred, line_mappings
+        )
+
+        invalid_blocks = []
+        non_equivalent_blocks = []
+
+        for block in blocks:
+            block_result = self.process_block(block, prediction)
+            invalid_blocks.extend(block_result.invalid_blocks)
+            non_equivalent_blocks.extend(block_result.non_equivalent_blocks)
+
+        pred_result = SketchResult(
+            invalid_blocks=invalid_blocks,
+            non_equivalent_blocks=non_equivalent_blocks,
+            total_blocks=blocks
+        )
+
+        return pred_result
+
+    def process_block(self, block: PureInstructionBlock, prediction: PredictionResult) -> SketchResult:
+        source_text = self.model.tokenizer.decode(
+            prediction.source[0][block.source_start:block.source_end]
+        ).strip()
+        pred_text = self.model.tokenizer.decode(
+            prediction.pred[0][block.pred_start:block.pred_end]
+        ).strip()
+
+        source_instructions = parse_assembly(source_text)
+        pred_instructions = parse_assembly(pred_text)
+
+        source_z3_block = extract_block_info(source_instructions)
+        pred_z3_block = extract_block_info(pred_instructions)
+
+        invalid_blocks = []
+        non_equivalent_blocks = []
+
+        if not is_valid_block_pair(source_z3_block, pred_z3_block):
+            invalid_blocks.append(block)
+
+        is_equivalent = blocks_equivalent_z3(
+            source_z3_block,
+            pred_z3_block,
+            self.config.source_lang,
+            self.config.target_lang
+        )
+
+        if not is_equivalent:
+            non_equivalent_blocks.append(block)
+
+        return SketchResult(
+            invalid_blocks=invalid_blocks,
+            non_equivalent_blocks=non_equivalent_blocks,
+            total_blocks=[]
+        )

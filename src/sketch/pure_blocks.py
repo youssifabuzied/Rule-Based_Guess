@@ -1,3 +1,4 @@
+from typing import List
 from dataclasses import dataclass
 from src.sketch.uni_parser import parse_assembly
 from src.sketch.uni_parser.ast import Instruction, Register, Immediate
@@ -22,7 +23,7 @@ def is_pure_line(line: str, lang: str) -> bool:
         if not isinstance(instr, Instruction):
             return False
 
-        instr_type, _, _ = get_mappings_for_lang(
+        instr_type, _ = get_mappings_for_lang(
             lang).get(instr.name, (None, None, None))
         if instr_type != InstructionType.ARITHMETIC:
             return False
