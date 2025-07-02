@@ -29,3 +29,12 @@ eval/problem135/code.c
 eval/problem136/code.c
 eval/problem137/code.c
 eval/problem138/code.c
+eval/problem139/code.c
+eval/problem14/code.c
+eval/problem140/code.c
+eval/problem141/code.c
+eval/problem142/code.c
+eval/problem143/code.c
+eval/problem144/code.c
+eval/problem145/code.c
+eval/problem146/code.c
