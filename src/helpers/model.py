@@ -20,10 +20,11 @@ def get_device() -> torch.device:
 class ModelConfig:
     name: str
     architecture: str
-    max_length: int
-    num_beams: int
-    num_return_sequences: int
     temperature: float
+    max_length: int
+    num_beams: int = 1
+    num_return_sequences: int = 1
+
 
 
 @dataclass

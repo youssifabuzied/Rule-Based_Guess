@@ -1,56 +1,85 @@
-	.section	__TEXT,__text,regular,pure_instructions
-	.build_version macos, 13, 0	sdk_version 13, 3
-	.globl	_func0                          ; -- Begin function func0
-	.p2align	2
-_func0:                                 ; @func0
-	.cfi_startproc
-; %bb.0:
-	sub	sp, sp, #48
-	.cfi_def_cfa_offset 48
-	str	x0, [sp, #40]
-	str	w1, [sp, #36]
-	str	x2, [sp, #24]
-	str	wzr, [sp, #20]
-	mov	w8, #1
-	str	w8, [sp, #44]
-	str	wzr, [sp, #12]
-	b	LBB0_1
-LBB0_1:                                 ; =>This Inner Loop Header: Depth=1
-	ldr	w8, [sp, #12]
-	ldr	w9, [sp, #36]
-	subs	w8, w8, w9
-	cset	w8, ge
-	tbnz	w8, #0, LBB0_4
-	b	LBB0_2
-LBB0_2:                                 ;   in Loop: Header=BB0_1 Depth=1
-	ldr	x8, [sp, #40]
-	ldrsw	x9, [sp, #12]
-	ldr	w9, [x8, x9, lsl #2]
-	ldr	w8, [sp, #20]
-	add	w8, w8, w9
-	str	w8, [sp, #20]
-	ldr	x8, [sp, #40]
-	ldrsw	x9, [sp, #12]
-	ldr	w9, [x8, x9, lsl #2]
-	ldr	w8, [sp, #44]
-	mul	w8, w8, w9
-	str	w8, [sp, #44]
-	b	LBB0_3
-LBB0_3:                                 ;   in Loop: Header=BB0_1 Depth=1
-	ldr	w8, [sp, #12]
-	add	w8, w8, #1
-	str	w8, [sp, #12]
-	b	LBB0_1
-LBB0_4:
-	ldr	w8, [sp, #20]
-	ldr	x9, [sp, #24]
-	str	w8, [x9]
-	ldr	w8, [sp, #44]
-	ldr	x9, [sp, #24]
-	str	w8, [x9, #4]
-	add	sp, sp, #48
-	ret
-	.cfi_endproc
-                                        ; -- End function
-.subsections_via_symbols
+.section .text
+.global func0
+.align 2
 
+func0:
+    cmp     w1, #1
+    blt     LBB0_3
+
+    mov     w8, w1
+    cmp     w1, #16
+    bhs     LBB0_4
+
+LBB0_2:
+    mov     x9, #0
+    mov     w11, #0
+    mov     w10, #1
+    b       LBB0_7
+
+LBB0_3:
+    mov     w11, #0
+    mov     w10, #1
+    b       LBB0_9
+
+LBB0_4:
+    movi    v0.2d, #0
+    and     x9, x8, #0xfffffff0
+    movi    v4.4s, #1
+    add     x10, x0, #32
+    movi    v1.2d, #0
+    mov     x11, x9
+    movi    v2.2d, #0
+    movi    v3.2d, #0
+    movi    v5.2d, #0
+    movi    v6.2d, #0
+    movi    v7.2d, #0
+
+LBB0_5:
+    ldp     q16, q17, [x10, #-32]
+    ldp     q18, q19, [x10], #64
+    add     v0.4s, v16.4s, v0.4s
+    add     v1.4s, v17.4s, v1.4s
+    add     v2.4s, v18.4s, v2.4s
+    add     v3.4s, v19.4s, v3.4s
+    mul     v4.4s, v16.4s, v4.4s
+    mul     v5.4s, v17.4s, v5.4s
+    mul     v6.4s, v18.4s, v6.4s
+    mul     v7.4s, v19.4s, v7.4s
+    subs    x11, x11, #16
+    bne     LBB0_5
+
+LBB0_6:
+    add     v4.4s, v4.4s, v5.4s
+    add     v4.4s, v4.4s, v6.4s
+    add     v4.4s, v4.4s, v7.4s
+    addv    s4, v4.4s
+    fmov    w11, s4
+
+    mul     v0.4s, v0.4s, v1.4s
+    mul     v0.4s, v0.4s, v2.4s
+    mul     v0.4s, v0.4s, v3.4s
+
+    ext     v1.16b, v0.16b, v0.16b, #2
+    mul     v0.2s, v0.2s, v1.2s
+
+    mov     w12, v0.s[1]
+    fmov    w13, s0
+    mul     w10, w13, w12
+
+    cmp     x9, x8
+    beq     LBB0_9
+
+LBB0_7:
+    add     x12, x0, x9, lsl #2
+    sub     x8, x8, x9
+
+LBB0_8:
+    ldr     w9, [x12], #4
+    add     w11, w9, w11
+    mul     w10, w9, w10
+    subs    x8, x8, #1
+    bne     LBB0_8
+
+LBB0_9:
+    stp     w11, w10, [x2]
+    ret
